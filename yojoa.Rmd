@@ -7,12 +7,12 @@ output: html_document
 
 ```{r}
 library(tidyverse)
-library(sf)
+library(sf) #use instead of sp
 library(mapview)
 library(lubridate)
 library(osmdata)
-library(raster)
-library(sp)
+library(raster) #matt says not to use
+library(sp) #also dead
 library(gstat)
 
 ```
@@ -20,19 +20,19 @@ library(gstat)
 
 # Data read
 ```{r}
-# Read in points
+# Read in points (OSM data)
 y <- read_csv('data/Yojoaheatmapfile.csv') 
-  
+head(y)  
 
+#convert to spatial object
 ys <- st_as_sf(y,coords=c('longitude','latitude'),crs=4326) 
 
+#extract coordinates after projecting onto local projection
 ys.m <- st_transform(ys,crs=26716) %>%
   mutate(x=st_coordinates(.)[,1],
          y=st_coordinates(.)[,2])
 
-
-
-# Get county 
+# Get state metadata (getbb-- get bounding box)
 bb <- getbb('Santa Barbara, Honduras')
 
 #Download Lago de Yojoa
@@ -43,43 +43,69 @@ add_osm_feature(key = 'natural', value = 'water') %>%
   filter(name == 'Lago de Yojoa') %>%
   st_transform(26716)
 
-
 #Get bboxx info for yojoa
 yo_box <- st_bbox(lake)
 
-mapview(ys,zcol='Cu_mg_kg')
+mapview(ys,zcol='Cu_mg_kg')+
+  mapview(lake)+
+  mapview(yo_box)
 ```
 
-## Make a heatmap
-```{r}
 
+## Make a heatmap--old way
+```{r}
+#matt converted everything back to spatial bc he didn't know how to work with sf data
 lake.sp <- as(lake,'Spatial')
 lake.raster <- raster(lake.sp,res=100)
 g <- as(lake.raster,'SpatialGrid')
 
-
 y.sp <- as(ys.m,'Spatial')
-
 
 metals = c('Cu_mg_kg','Zn_mg_kg','Cd_mg_kg','Pb_mg_kg')
 
-
 for(i in 1:length(metals)){
-  
   
   formula = as.formula(paste(metals[i], 1,sep='~'))
   cu_s <- gstat(id=metals[i],formula=formula,data=y.sp)
   z <- interpolate(lake.raster,cu_s) %>% round(.,1)
-  
+  #mask out anything that's not open water
   z <- mask(z,lake.sp)
-  
-  
-  
-  
+  #make interactive map
   cu <- mapview(z,na.col=NA,col.regions=mapviewGetOption('vector.palette')) + 
     mapview(ys.m,zcol=metals[i])
+  #save as html
   mapshot(cu,url=paste0(metals[i],'.html'))
 }
 
 ```
+
+# The New Way
+
+```{r}
+library(stars)
+#STARS = spatial temporal arrays, new way to work w raster data in R (stack in time)
+#terra looks a lot more like raster package
+
+lake_stars<- st_bbox(lake) %>%
+  st_as_stars(dx=100) %>%
+  st_crop(lake)
+
+interp = idw(Zn_mg_kg~1, y.sp, lake_stars)
+
+mapview(interp, na.col=NA, col.regions=mapviewGetOption("vector.palette"))+
+  mapview(y.sp,zcol = "Zn_mg_kg")
+
+```
+
+## Variogram
+
+```{r}
+#tells you how the value of interest changes as you get farther from site
+v_zn<- variogram(Zn_mg_kg ~ 1, y.sp)
+
+v.m = fit.variogram(v_zn, vgm(1, "Exp",50,1))
+plot(v_zn, v.m, plot.numbers=TRUE)
+
+```
+
 
